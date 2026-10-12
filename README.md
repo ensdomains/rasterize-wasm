@@ -34,6 +34,19 @@ await renderer.render(svgString, { format: 'file', path: 'output.png' });
 const base64 = await renderer.render(svgString, { format: 'base64', dataURL: true });
 ```
 
+## measuring text
+
+`measureText` returns the width `render()` will give a piece of text: the same font per script, HarfBuzz shaping and emoji widths, without drawing anything. Use it to size things around text (a label, a box) before rendering.
+
+```javascript
+const width = await renderer.measureText('مرحبا.eth', 60, {
+  primaryFont: satoshiBytes,   // the font the SVG embeds with @font-face
+  features: ['ss01', 'tnum']   // what the SVG turns on with font-feature-settings
+});
+```
+
+Pass the unescaped text (`a&b`, not `a&amp;b`). For multi-line text it returns the widest line. Text in `<text>` elements is entity-decoded before shaping, so `a&amp;b` renders as `a&b`.
+
 ## examples
 
 | SVG Input | PNG Output |

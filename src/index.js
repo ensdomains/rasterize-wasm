@@ -6,7 +6,7 @@ import { detectAndConvert } from './adapters/input.js';
 import { toBase64, toFile, toMultipleFormats } from './adapters/output.js';
 import { extractAllTextContent, extractEmbeddedFont, extractFontFeatures, replaceTextElement, optimizeFilters } from './utils/svg-parser.js';
 import { FontLoader, createHbFont, LOCAL_FONT_FILES } from './renderers/font-loader.js';
-import { generateTextPaths, setEmojiData } from './renderers/text-processor.js';
+import { generateTextPaths, measureTextWidth, setEmojiData } from './renderers/text-processor.js';
 import { SVGRenderer } from './renderers/svg-renderer.js';
 
 export class UniversalSVGRenderer {
@@ -111,6 +111,43 @@ export class UniversalSVGRenderer {
         }
     }
 
+    /**
+     * Width of `text` at `fontSize` exactly as render() would draw it: same font selection,
+     * HarfBuzz shaping, emoji and fallback widths. Use it to size layout around text before rendering.
+     * @param {string} text - Unescaped text (what the <text> element displays)
+     * @param {number} fontSize
+     * @param {Object} [options]
+     * @param {ArrayBuffer|Uint8Array} [options.primaryFont] - The font the SVG will embed with @font-face
+     * @param {string|string[]} [options.features] - Features the SVG turns on with font-feature-settings, e.g. ['ss01', 'tnum']
+     * @returns {Promise<number>} Advance width in user units (the widest line for multi-line text)
+     */
+    async measureText(text, fontSize, { primaryFont = null, features = [] } = {}) {
+        const [primary, internationalFonts] = await Promise.all([
+            this._loadPrimaryFontCached(primaryFont),
+            this.options.enableInternationalFonts
+                ? FontLoader.loadInternationalFonts(text)
+                : Promise.resolve(new Map())
+        ]);
+        // As in render(): the fallback font is only used when there is no primary font.
+        const fallbackFont = primary ? null : await FontLoader.loadFallbackFont(this.options.fallbackFont);
+        const featureString = Array.isArray(features) ? features.join(',') : features;
+        return measureTextWidth(text, fontSize, primary, internationalFonts, fallbackFont, {
+            enableEmoji: this.options.enableEmoji,
+            featureString
+        });
+    }
+
+    // measureText is called repeatedly while searching for a font size; parse each primary font once.
+    async _loadPrimaryFontCached(fontBuffer) {
+        if (!fontBuffer) return null;
+        this._primaryFonts ??= new WeakMap();
+        if (!this._primaryFonts.has(fontBuffer)) {
+            const bytes = fontBuffer instanceof ArrayBuffer ? new Uint8Array(fontBuffer) : fontBuffer;
+            this._primaryFonts.set(fontBuffer, FontLoader.loadPrimaryFont(bytes));
+        }
+        return this._primaryFonts.get(fontBuffer);
+    }
+
     _handleOutput(pngBuffer, outputOptions) {
         // If no specific output requested, return buffer
         if (!outputOptions || Object.keys(outputOptions).length === 0) {
@@ -213,7 +250,7 @@ export { toBase64, toFile, toMultipleFormats } from './adapters/output.js';
 export { extractAllTextContent, extractEmbeddedFont, extractFontFeatures, replaceTextElement, optimizeFilters } from './utils/svg-parser.js';
 export { FontLoader, setHarfBuzzWasm, setFontData, createHbFont, LOCAL_FONT_FILES } from './renderers/font-loader.js';
 export { setBrotliWasm, decompress } from './utils/decompress.js';
-export { generateTextPaths, segmentGraphemes, isEmoji, loadEmojiSvg, applyRTLProcessing, setEmojiData } from './renderers/text-processor.js';
+export { generateTextPaths, measureTextWidth, segmentGraphemes, isEmoji, loadEmojiSvg, applyRTLProcessing, setEmojiData } from './renderers/text-processor.js';
 export { SVGRenderer } from './renderers/svg-renderer.js';
 
 // Export default instance
