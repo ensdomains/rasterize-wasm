@@ -47,6 +47,8 @@ const width = await renderer.measureText('مرحبا.eth', 60, {
 
 Pass the unescaped text (`a&b`, not `a&amp;b`). For multi-line text it returns the widest line. Text in `<text>` elements is entity-decoded before shaping, so `a&amp;b` renders as `a&b`.
 
+On a `createRasterizer()` instance, `measureText` uses the same fonts as its `render()`: the script and fallback fonts and emoji data passed to `createRasterizer`, never the filesystem. Pass the same `primaryFont` buffer each call; it is parsed once per buffer.
+
 ## examples
 
 | SVG Input | PNG Output |

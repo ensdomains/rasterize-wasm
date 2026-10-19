@@ -5,9 +5,14 @@
 import { detectAndConvert } from './adapters/input.js';
 import { toBase64, toFile, toMultipleFormats } from './adapters/output.js';
 import { extractAllTextContent, extractEmbeddedFont, extractFontFeatures, replaceTextElement, optimizeFilters } from './utils/svg-parser.js';
-import { FontLoader, createHbFont, LOCAL_FONT_FILES } from './renderers/font-loader.js';
+import { FontLoader, createHbFont, destroyHbFont, LOCAL_FONT_FILES } from './renderers/font-loader.js';
 import { generateTextPaths, measureTextWidth, setEmojiData } from './renderers/text-processor.js';
 import { SVGRenderer } from './renderers/svg-renderer.js';
+
+// Frees measureText's cached primary fonts once their buffer is garbage collected
+const primaryFontFinalizer = typeof FinalizationRegistry === 'undefined'
+    ? null
+    : new FinalizationRegistry(font => font.then(destroyHbFont));
 
 export class UniversalSVGRenderer {
     constructor(options = {}) {
@@ -41,25 +46,10 @@ export class UniversalSVGRenderer {
                 const embeddedFontBuffer = extractEmbeddedFont(svgString);
                 const allText = textEntries.map(e => e.textContent).join('');
 
-                let primaryFont, internationalFonts, fallbackFont;
-
-                if (this._fontRegistry) {
-                    // Pre-loaded fonts path (Workers / createRasterizer)
-                    primaryFont = await FontLoader.loadPrimaryFont(embeddedFontBuffer);
-                    internationalFonts = this.options.enableInternationalFonts
-                        ? FontLoader.getInternationalFontsFromRegistry(allText, this._fontRegistry)
-                        : new Map();
-                    fallbackFont = this._fallbackFontObj;
-                } else {
-                    // Filesystem loading path (Node.js / with-fonts)
-                    [primaryFont, internationalFonts, fallbackFont] = await Promise.all([
-                        FontLoader.loadPrimaryFont(embeddedFontBuffer),
-                        this.options.enableInternationalFonts
-                            ? FontLoader.loadInternationalFonts(allText)
-                            : Promise.resolve(new Map()),
-                        FontLoader.loadFallbackFont(this.options.fallbackFont)
-                    ]);
-                }
+                const [primaryFont, [internationalFonts, fallbackFont]] = await Promise.all([
+                    FontLoader.loadPrimaryFont(embeddedFontBuffer),
+                    this._scriptFonts(allText)
+                ]);
 
                 // Use fallback only when no primary font
                 const effectiveFallback = primaryFont ? null : fallbackFont;
@@ -81,12 +71,8 @@ export class UniversalSVGRenderer {
                         })
                     );
                 } finally {
-                    // The embedded font is per-render; free its HarfBuzz heap copy and draw callbacks
-                    if (primaryFont) {
-                        primaryFont.hbFont.destroy();
-                        primaryFont.hbFace.destroy();
-                        primaryFont.hbBlob.destroy();
-                    }
+                    // The embedded font is per-render
+                    destroyHbFont(primaryFont);
                 }
 
                 // Step 5: Apply all replacements
@@ -122,19 +108,32 @@ export class UniversalSVGRenderer {
      * @returns {Promise<number>} Advance width in user units (the widest line for multi-line text)
      */
     async measureText(text, fontSize, { primaryFont = null, features = [] } = {}) {
-        const [primary, internationalFonts] = await Promise.all([
+        const [primary, [internationalFonts, fallbackFont]] = await Promise.all([
             this._loadPrimaryFontCached(primaryFont),
-            this.options.enableInternationalFonts
-                ? FontLoader.loadInternationalFonts(text)
-                : Promise.resolve(new Map())
+            this._scriptFonts(text)
         ]);
-        // As in render(): the fallback font is only used when there is no primary font.
-        const fallbackFont = primary ? null : await FontLoader.loadFallbackFont(this.options.fallbackFont);
         const featureString = Array.isArray(features) ? features.join(',') : features;
-        return measureTextWidth(text, fontSize, primary, internationalFonts, fallbackFont, {
+        // As in render(): the fallback font is only used when there is no primary font.
+        return measureTextWidth(text, fontSize, primary, internationalFonts, primary ? null : fallbackFont, {
             enableEmoji: this.options.enableEmoji,
             featureString
         });
+    }
+
+    /**
+     * Script fonts and fallback font for text, shared by render() and measureText() so they always agree:
+     * from the registry for createRasterizer instances (never the filesystem), else the bundled files.
+     * @returns {Promise<[Map, Object|null]>} [internationalFonts, fallbackFont]
+     */
+    async _scriptFonts(text) {
+        const enabled = this.options.enableInternationalFonts;
+        if (this._fontRegistry) {
+            return [enabled ? FontLoader.getInternationalFontsFromRegistry(text, this._fontRegistry) : new Map(), this._fallbackFontObj];
+        }
+        return Promise.all([
+            enabled ? FontLoader.loadInternationalFonts(text) : new Map(),
+            FontLoader.loadFallbackFont(this.options.fallbackFont)
+        ]);
     }
 
     // measureText is called repeatedly while searching for a font size; parse each primary font once.
@@ -143,7 +142,11 @@ export class UniversalSVGRenderer {
         this._primaryFonts ??= new WeakMap();
         if (!this._primaryFonts.has(fontBuffer)) {
             const bytes = fontBuffer instanceof ArrayBuffer ? new Uint8Array(fontBuffer) : fontBuffer;
-            this._primaryFonts.set(fontBuffer, FontLoader.loadPrimaryFont(bytes));
+            const font = FontLoader.loadPrimaryFont(bytes);
+            this._primaryFonts.set(fontBuffer, font);
+            // ponytail: freed only when the buffer is garbage collected; callers passing a new buffer
+            // per call get a parse per call. Pass the same buffer, or add explicit disposal if that bites.
+            primaryFontFinalizer?.register(fontBuffer, font);
         }
         return this._primaryFonts.get(fontBuffer);
     }

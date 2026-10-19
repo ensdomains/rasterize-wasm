@@ -100,6 +100,14 @@ export async function createHbFont(arrayBuffer) {
     return { hbFont: font, hbFace: face, hbBlob: blob, upem: face.upem };
 }
 
+/** Free a createHbFont() result: its HarfBuzz heap copy and draw callbacks. */
+export function destroyHbFont(fontObj) {
+    if (!fontObj) return;
+    fontObj.hbFont.destroy();
+    fontObj.hbFace.destroy();
+    fontObj.hbBlob.destroy();
+}
+
 /**
  * Map font family names to local gzipped TTF filenames in fonts/ directory.
  */

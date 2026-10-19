@@ -7,7 +7,8 @@ import { UniversalSVGRenderer, FontLoader, generateTextPaths, extractAllTextCont
 const satoshi = extractEmbeddedFont(readFileSync(new URL('../examples/assets/tanrikulu.eth.svg', import.meta.url), 'utf8'));
 const renderer = new UniversalSVGRenderer();
 const TEXTS = ['tanrikulu.eth', '1111.eth', '你好.eth', '音乐lover.eth', '안녕하세요.eth', 'שלום.eth', 'مرحبا.eth',
-  'hello مرحبا world', 'नमस्ते.eth', 'გამარჯობა.eth', 'γεια.eth', 'привет.eth', 'สวัสดี.eth', '🚀rocket.eth', '👨‍👩‍👧‍👦.eth'];
+  'hello مرحبا world', 'नमस्ते.eth', 'გამარჯობა.eth', 'γεια.eth', 'привет.eth', 'สวัสดี.eth', '🚀rocket.eth', '👨‍👩‍👧‍👦.eth',
+  '🦊🧙🏻‍♂.eth', 'hi你好🚀.eth'];
 
 // generateTextPaths shifts right-anchored text by its full width, so that shift is the width render() lays out.
 async function renderedWidth(text, fontSize, features, primaryBuffer) {
