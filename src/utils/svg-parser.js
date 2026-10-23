@@ -2,10 +2,21 @@
  * SVG parsing utilities
  */
 
+const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+function decodeXmlEntities(text) {
+    return text.replace(/&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(amp|lt|gt|quot|apos));/g, (entity, hex, dec, name) => {
+        if (name) return XML_ENTITIES[name];
+        const codePoint = hex ? parseInt(hex, 16) : Number(dec);
+        return codePoint <= 0x10FFFF ? String.fromCodePoint(codePoint) : entity;
+    });
+}
+
 function stripInnerTags(content) {
-    // Strip inner element tags (e.g. <tspan ...>...</tspan>) keeping only text
+    // Strip inner element tags (e.g. <tspan ...>...</tspan>) keeping only text, and decode
+    // entities so "a&amp;b" is shaped as "a&b".
     // [^<>] keeps each match attempt bounded by the next '<' (no quadratic backtracking)
-    return content.replace(/<[^<>]*>/g, '').trim();
+    return decodeXmlEntities(content.replace(/<[^<>]*>/g, '').trim());
 }
 
 function attr(str, name) {

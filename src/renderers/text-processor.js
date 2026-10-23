@@ -248,9 +248,9 @@ function segmentByFont(graphemes, primaryFont, internationalFonts, fallbackFont,
 }
 
 /**
- * Shape a text run with HarfBuzz and return SVG path fragments.
+ * Shape a text run with HarfBuzz and return SVG path fragments (none when withPaths is false).
  */
-function shapeAndRender(hb, fontObj, text, x, y, fontSize, fill, featureString, direction) {
+function shapeAndRender(hb, fontObj, text, x, y, fontSize, fill, featureString, direction, withPaths = true) {
     const { hbFont, upem } = fontObj;
     const scale = fontSize / upem;
     const parts = [];
@@ -276,7 +276,7 @@ function shapeAndRender(hb, fontObj, text, x, y, fontSize, fill, featureString, 
             const xOffset = glyph.dx * scale;
             const yOffset = glyph.dy * scale;
 
-            if (glyphId !== 0) {
+            if (withPaths && glyphId !== 0) {
                 const pathData = hbFont.glyphToPath(glyphId);
                 if (pathData) {
                     // font.glyphToPath returns path in font units, Y-up.
@@ -296,12 +296,17 @@ function shapeAndRender(hb, fontObj, text, x, y, fontSize, fill, featureString, 
     return { parts, advanceX: currentX - x };
 }
 
-export async function generateTextPaths(text, x, y, fontSize, fill, primaryFont, internationalFonts, fallbackFont, options = {}) {
-    const { enableEmoji = true, fontWeight = 700, featureString = '', textAnchor = 'start' } = options;
+/**
+ * Lay text out exactly as it is drawn. Returns the SVG fragments (only when withPaths is true),
+ * the advance of the last line (used for text-anchor) and the widest line's advance.
+ */
+async function layoutText(text, x, y, fontSize, fill, primaryFont, internationalFonts, fallbackFont, options, withPaths) {
+    const { enableEmoji = true, fontWeight = 700, featureString = '' } = options;
     const hb = await FontLoader.getHb();
     const parts = [];
     let currentX = x;
     let currentY = y;
+    let maxWidth = 0;
     const lineHeight = fontSize * 1.2;
 
     // Step 1: Run Unicode Bidirectional Algorithm on the full text
@@ -321,6 +326,7 @@ export async function generateTextPaths(text, x, y, fontSize, fill, primaryFont,
         for (const run of runs) {
             if (run.type === 'newline') {
                 if (run.chars === '\n') {
+                    maxWidth = Math.max(maxWidth, currentX - x);
                     currentX = x;
                     currentY += lineHeight;
                 }
@@ -331,7 +337,7 @@ export async function generateTextPaths(text, x, y, fontSize, fill, primaryFont,
                 const emojiContent = run.emojiSvg.match(/<svg[^>]*>(.*)<\/svg>/s)?.[1];
                 if (emojiContent) {
                     const emojiY = currentY - fontSize * 0.75;
-                    parts.push(`<g transform="translate(${currentX}, ${emojiY}) scale(${fontSize/36})">${emojiContent}</g>`);
+                    if (withPaths) parts.push(`<g transform="translate(${currentX}, ${emojiY}) scale(${fontSize/36})">${emojiContent}</g>`);
                     currentX += fontSize;
                 }
                 continue;
@@ -340,7 +346,7 @@ export async function generateTextPaths(text, x, y, fontSize, fill, primaryFont,
             if (run.type === 'fallback') {
                 const char = run.chars;
                 const fontFamilyAttr = FontLoader.getFontFamilyCSS(char);
-                parts.push(`<text x="${currentX}" y="${currentY}" font-family="${fontFamilyAttr}" font-size="${fontSize}" fill="${fill}" font-weight="${fontWeight}">${escapeXml(char)}</text>`);
+                if (withPaths) parts.push(`<text x="${currentX}" y="${currentY}" font-family="${fontFamilyAttr}" font-size="${fontSize}" fill="${fill}" font-weight="${fontWeight}">${escapeXml(char)}</text>`);
                 currentX += FontLoader.isCJK(char) ? fontSize : fontSize * 0.6;
                 continue;
             }
@@ -349,7 +355,7 @@ export async function generateTextPaths(text, x, y, fontSize, fill, primaryFont,
                 // Shape with HarfBuzz — pass bidi direction explicitly
                 const features = (run.font === primaryFont) ? featureString : '';
                 const { parts: shapedParts, advanceX } = shapeAndRender(
-                    hb, run.font, run.chars, currentX, currentY, fontSize, fill, features, bidiRun.direction
+                    hb, run.font, run.chars, currentX, currentY, fontSize, fill, features, bidiRun.direction, withPaths
                 );
                 parts.push(...shapedParts);
                 currentX += advanceX;
@@ -358,10 +364,27 @@ export async function generateTextPaths(text, x, y, fontSize, fill, primaryFont,
         }
     }
 
+    const lastLineWidth = currentX - x;
+    return { parts, lastLineWidth, maxWidth: Math.max(maxWidth, lastLineWidth) };
+}
+
+export async function generateTextPaths(text, x, y, fontSize, fill, primaryFont, internationalFonts, fallbackFont, options = {}) {
+    const { textAnchor = 'start' } = options;
+    const { parts, lastLineWidth: totalWidth } = await layoutText(text, x, y, fontSize, fill, primaryFont, internationalFonts, fallbackFont, options, true);
+
     const content = parts.join('');
     if (textAnchor === 'start') return content;
 
-    const totalWidth = currentX - x;
     const offset = textAnchor === 'middle' ? -totalWidth / 2 : -totalWidth;
     return `<g transform="translate(${offset}, 0)">${content}</g>`;
+}
+
+/**
+ * Advance width of text at fontSize, laid out exactly as generateTextPaths draws it
+ * (same font selection, HarfBuzz shaping, emoji and fallback widths). For multi-line
+ * text, the widest line.
+ */
+export async function measureTextWidth(text, fontSize, primaryFont, internationalFonts, fallbackFont, options = {}) {
+    const { maxWidth } = await layoutText(text, 0, 0, fontSize, '', primaryFont, internationalFonts, fallbackFont, options, false);
+    return maxWidth;
 }
